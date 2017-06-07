@@ -23,42 +23,30 @@ class ImportSource extends ImportSourceHook
      */
     public function fetchData()
     {
-        if ($this->getSetting('query_type') === 'resource') {
-            return $this->fetchResourceData();
-        }
 
+        $db = $this->db();
         $result = array();
-        $db    = $this->db();
-        Benchmark::measure('Pdb, going to fetch classes');
-        $data  = $db->classes();
-        Benchmark::measure('Pdb, got classes, going to fetch facts');
-        $facts = $db->fetchFacts();
-        Benchmark::measure('Pdb, got facts, preparing result');
+        foreach ($this->listColumns() as $column) {
 
-        foreach ($facts as $host => $f) {
+            $facts = $db->getFact($column);
 
-            $f = $facts[$host];
-            if (array_key_exists($host, $data)) {
-                $classes = $data[$host];
-            } else {
-                $classes = array();
-            }
-            foreach (array_keys((array) $f) as $key) {
-                if (preg_match('/(?:memoryfree|swapfree|uptime)/', $key)) {
-                    unset($f->$key);
+            foreach ( $facts as $res) {
+                if ( ! isset($result[$res->certname]) ) {
+                    $result[$res->certname] = array(
+                        'certname' => $res->certname
+                    );
                 }
+                $result[$res->certname][$res->name] = $res->value;
             }
-            $result[] = (object) array(
-                'certname' => $host,
-                'classes'  => $classes,
-                'facts'    => $f,
-            );
-
         }
 
-        Benchmark::measure('Pdb result ready');
+        $final = array();
 
-        return $result;
+        foreach ( $result as $res ) {
+                $final[] = (object)$res;
+        }
+
+        return $final;
     }
 
     /**
@@ -66,36 +54,16 @@ class ImportSource extends ImportSourceHook
      */
     public function listColumns()
     {
-        if ($this->getSetting('query_type') === 'resource') {
-            return array(
-                'certname',
-                'type',
-                'title',
-                'exported',
-                'parameters',
-                'environment',
-            );
+
+        $columns = array();
+        $columns[] = 'certname';
+
+        $facts = preg_split('/,\s*/', $this->settings['queried_facts'], -1, PREG_SPLIT_NO_EMPTY);
+
+        foreach ($facts as $fact) {
+            $columns[] = $fact;
         }
-
-        $columns = array(
-            'certname',
-            'classes',
-            'facts'
-        );
-
-        foreach ($this->db()->listFactNames() as $name) {
-            $columns[] = 'facts.' . $name;
-        }
-
         return $columns;
-    }
-
-    /**
-     * @return \stdClass[]
-     */
-    protected function fetchResourceData()
-    {
-        return $this->db()->fetchResourcesByType($this->getSetting('resource_type'));
     }
 
     /**
@@ -146,50 +114,20 @@ class ImportSource extends ImportSourceHook
             return;
         }
 
-        $form->addElement('select', 'query_type', array(
-            'label'        => 'Query type',
+        $allowed_facts_name = array(
+            'server_class' => 'Server class',
+            'server_type'  => 'Server type',
+        );
+
+        $form->addElement('textarea', 'queried_facts', array(
+            'label'        => 'List of facts to query',
             'required'     => true,
             'class'        => 'autosubmit',
-            'multiOptions' => $form->optionalEnum(array(
-                'resource' => $form->translate('Resources'),
-                'node'     => $form->translate('Nodes'),
-            )),
+            'rows'         => 5,
+            'spellcheck'   => 'false',
+            'description'  => 'List of comma-separated facts like:'
+                . 'ipaddress_eth0, puppetversion',
         ));
-
-        if (! ($queryType = $form->getSentOrObjectSetting('query_type'))) {
-            return;
-        }
-
-        try {
-            $db = new PuppetDbApi(
-                $form->getSentOrObjectSetting('api_version'),
-                $cert,
-                $server
-            );
-
-            $resourceTypes = $db->enumResourceTypes();
-        } catch (Exception $e) {
-            $form->addError(
-                sprintf(
-                    $form->translate('Failed to load resource types: %s'),
-                    $e->getMessage()
-                )
-            );
-        }
-
-        if (empty($resourceTypes)) {
-            $form->addElement('text', 'resource_type', array(
-                'label'        => 'Resource type',
-                'required'     => true,
-            ));
-        } else {
-            $form->addElement('select', 'resource_type', array(
-                'label'        => 'Resource type',
-                'required'     => true,
-                'class'        => 'autosubmit',
-                'multiOptions' => $form->optionalEnum($resourceTypes)
-            ));
-        }
 
         return;
     }

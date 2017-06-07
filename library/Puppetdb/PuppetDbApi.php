@@ -77,53 +77,6 @@ class PuppetDbApi
         return $this;
     }
 
-    /**
-     * @return array
-     */
-    public function listFactNames()
-    {
-        // Min version: v2
-        if ($this->version === 'v1') {
-            return array();
-        }
-
-        return json_decode($this->get('fact-names'));
-    }
-
-    /**
-     * @return array
-     */
-    public function enumResourceTypes()
-    {
-        if ($this->version !== 'v4') {
-            return array();
-        }
-
-        $order = array(
-            array('field' => 'exported', 'order' => 'desc'),
-            array('field' => 'type', 'order' => 'asc')
-        );
-
-        $url = 'resources?' . $this->query(array(
-            'extract',
-            array(array('function', 'count'), 'type', 'exported'),
-            array('~', 'type', '.'),
-            array('group_by', 'type', 'exported')
-        )) . '&' . $this->orderBy($order);
-
-        $enum = array();
-        foreach (json_decode($this->get($url)) as $res) {
-            if ($res->exported) {
-                $name = '@@' . $res->type;
-            } else {
-                $name = $res->type;
-            }
-            $enum[$name] = sprintf('%s (%d)', $name, $res->count);
-        }
-
-        return $enum;
-    }
-
     protected function query($query = null)
     {
         if ($query === null) {
@@ -143,31 +96,23 @@ class PuppetDbApi
         return $key . '=' . rawurlencode(json_encode($value));
     }
 
+
     /**
      * @return array
      */
-    public function classes()
+    public function getFact($factName) 
     {
-        $classes = array();
+        $facts = array();
+
         $order = array(
             array('field' => 'certname', 'order' => 'asc'),
-            array('field' => 'title',    'order' => 'asc')
         );
 
-        $url = 'resources?'
-             . $this->encodeParameter('query', array('=', 'type', 'Class'))
-             . '&' . $this->encodeParameter($this->orderBy, $order)
-             ;
-
-        foreach ($this->fetchLimited($url) as $entry) {
-            if (! array_key_exists($entry->certname, $classes)) {
-                $classes[$entry->certname] = array();
-            }
-
-            $classes[$entry->certname][] = $entry->title;
-        }
-
-        return $classes;
+        $url = 'facts?'
+            . $this->encodeParameter('query', array('=', 'name', $factName))
+            . '&' . $this->encodeParameter($this->orderBy, $order)
+            ;
+        return $this->fetchLimited($url);
     }
 
     protected function fetchLimited($url)
@@ -197,126 +142,6 @@ class PuppetDbApi
         return $result;
     }
 
-    /**
-     * @param  Filter $filter
-     * @param  bool $exported
-     * @return array
-     */
-    public function fetchResources(Filter $filter = null, $exported = null)
-    {
-        if ($filter === null || $filter->isEmpty()) {
-            $query = null;
-        } else {
-            $query = FilterRenderer::forFilter($filter)->toArray();
-        }
-
-        if ($exported !== null) {
-            if ($query === null) {
-                $query = array('=', 'exported', $exported);
-            } else {
-                $query = array(
-                    'and',
-                    array('=', 'exported', $exported),
-                    $query
-                );
-            }
-        }
-
-        $url = 'resources';
-        $columns = array(
-            'certname',
-            'type',
-            'title',
-            'exported',
-            'parameters',
-            'environment',
-            // 'tags' -> on demand?
-        );
-        if ($query !== null) {
-            if ($this->version === 'v4') {
-                $query = array('extract', $columns, $query);
-            }
-            $url .= '?' . $this->encodeParameter('query', $query);
-        }
-
-        $order = array(
-            array('field' => 'type', 'order' => 'asc'),
-            array('field' => 'title', 'order' => 'asc')
-        );
-
-        if ($exported === null) {
-            array_unshift(
-                $order,
-                array('field' => 'exported', 'order' => 'desc')
-            );
-        }
-
-        $url .= '&' . $this->orderBy($order);
-
-        return $this->fetchLimited($url);
-    }
-
-    /**
-     * @param string $type
-     * @param Filter $filter
-     * @return array
-     */
-    public function fetchResourcesByType($type, Filter $filter = null)
-    {
-        if (substr($type, 0, 2) === '@@') {
-            $exported = true;
-            $type = substr($type, 2);
-        } else {
-            $exported = false;
-        }
-        if ($filter === null) {
-            $filter = Filter::fromQueryString('type=' . $type);
-        } else {
-            $filter = $filter->andFilter(Filter::fromQueryString('type=' . $type));
-        }
-
-        return $this->fetchResources($filter, $exported);
-    }
-
-    /**
-     * @param Filter $filter
-     * @return array
-     */
-    public function fetchFacts(Filter $filter = null)
-    {
-        $unStringify = true;
-
-        if ($filter === null) {
-            $facts = $this->get('facts');
-        } else {
-            $facts = $this->get('facts?' . $this->renderFilter($filter));
-        }
-
-        $result = array();
-        foreach (json_decode($facts) as $row) {
-            if (! array_key_exists($row->certname, $result)) {
-                $result[$row->certname] = (object) array();
-            }
-            // What to do with row->environment on newer versions?
-            if ($unStringify && is_string($row->value)) {
-                $first = substr($row->value, 0, 1);
-                $last  = substr($row->value, -1);
-                if (($first === '{' && $last === '}')
-                    || ($first === '[' && $last === ']')
-                    || ($first === '"' && $last === '"')
-                ) {
-                    $result[$row->certname]->{$row->name} = json_decode($row->value);
-                } else {
-                    $result[$row->certname]->{$row->name} = $row->value;
-                }
-            } else {
-                $result[$row->certname]->{$row->name} = $row->value;
-            }
-        }
-
-        ksort($result);
-        return $result;
-    }
 
     protected function renderFilter(Filter $filter)
     {
@@ -403,7 +228,7 @@ class PuppetDbApi
      */
     public function post($url, $body = null)
     {
-        return $this->request('post', $url, $body);
+        return false;
     }
 
     /**
